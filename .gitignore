@@ -1,0 +1,11 @@
+# CSVs
+*.csv
+
+# XLS Files
+*.xls
+
+# Plot Photos
+*.png
+
+# Virtual Environment
+.venv
