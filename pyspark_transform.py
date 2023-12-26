@@ -24,13 +24,13 @@ spark = SparkSession.builder.appName("Random Data").config("spark.driver.memory"
 start_time = time.time()
 
 def run_experiment(spark=spark):
-    # generate_sample_dataset()
+    generate_sample_dataset()
 
-    # print("Reading the data from random_data.csv")
-    # df = spark.read.csv("random_data.csv", inferSchema=True, header=True)
+    print("Reading the data from random_data.csv")
+    df = spark.read.csv("random_data.csv", inferSchema=True, header=True)
 
-    print("Reading the data from Kaggle")
-    df = spark.read.csv("tested.xls", inferSchema=True, header=True)
+    # print("Reading the data from Kaggle")
+    # df = spark.read.csv("tested.xls", inferSchema=True, header=True)
 
     print("Starting Feature Engineering")
     rm_columns = df.select(
@@ -83,9 +83,13 @@ def run_experiment(spark=spark):
     return roc_auc
 
 
+## STARTING OF THE MAIM PROGRAM
+
+## Running the experiment 10 times
+date = time.strftime("%Y-%m-%d-%H-%M-%S")
 roc_scores = []
 
-for i in range(1, 10):
+for i in range(1, 1000):
     print(f"Running experiment {i}")
     score = run_experiment(spark=spark)
     roc_scores.append(score)
@@ -96,7 +100,7 @@ plt.title("ROC AUC Scores")
 plt.xlabel("Experiment Number")
 plt.ylabel("AUC Score")
 plt.grid(True)
-plt.savefig("roc_auc_plot.png")
+plt.savefig(f"plots/roc_auc_plot_{date}.png")
 
 spark.stop()
 

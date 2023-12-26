@@ -87,9 +87,6 @@ def generate_extra_cols(df):
     # Cabin Deck
     df = df.withColumn('Deck', when(col('Cabin').isNotNull(), col('Cabin').substr(0, 1)).otherwise('Unknown'))
 
-    # # Ticket Prefix
-    # df = df.withColumn('TicketPrefix', when(col('Ticket').rlike('[A-Za-z]'), col('Ticket').regexp_extract(r'([A-Za-z]+)', 1)).otherwise('Unknown'))
-
     # Is Alone
     df = df.withColumn('IsAlone', when(col('FamilySize') == 1, 1).otherwise(0))
 
