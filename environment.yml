@@ -1,0 +1,12 @@
+name: pyspark-model
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    - pyspark
+    - matplotlib
+    - pandas
+    - pylint
+    - black
+    - requests
+    - pytest

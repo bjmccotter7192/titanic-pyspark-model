@@ -1,116 +1,132 @@
+import logging
 import time
+from typing import List, Tuple
+from contextlib import contextmanager
 
-# Starting the Spark Session
-from pyspark.sql import SparkSession
-from utils import generate_sample_dataset, generate_extra_cols
-
-# Importing the required libraries
-from pyspark.ml.feature import VectorAssembler, StringIndexer, OneHotEncoder, Imputer
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.ml.feature import VectorAssembler, StringIndexer, OneHotEncoder
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
-from pyspark.sql.functions import col
-
 import matplotlib.pyplot as plt
 
-import resource
+from utils import generate_sample_dataset, generate_extra_cols
 
-# Starting the Spark Session
-print("Starting the Spark Session")
-spark = SparkSession.builder.appName("Random Data").config("spark.driver.memory", "10g").getOrCreate()
+# Constants
+JAVA_SECURITY_OPTION = "-Djava.security.manager=allow"
+DRIVER_MEMORY = "10g"
+TRAIN_TEST_SPLIT_RATIO = [0.7, 0.3]
+NUM_EXPERIMENTS = 30
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Setting the start time
-start_time = time.time()
+@contextmanager
+def create_spark_session(app_name: str = "Random Data") -> SparkSession:
+    """Create a SparkSession with error handling."""
+    try:
+        spark = (SparkSession.builder
+                .appName(app_name)
+                .config("spark.driver.memory", DRIVER_MEMORY)
+                .config("spark.driver.extraJavaOptions", JAVA_SECURITY_OPTION)
+                .getOrCreate())
+        yield spark
+    finally:
+        if 'spark' in locals():
+            spark.stop()
 
-def run_experiment(spark=spark):
-    generate_sample_dataset()
+def load_and_preprocess_data(spark: SparkSession) -> DataFrame:
+    """Load and preprocess the dataset."""
+    try:
+        generate_sample_dataset()
+        logger.info("Reading data from random_data.csv")
+        df = spark.read.csv("random_data.csv", inferSchema=True, header=True)
+        
+        selected_columns = [
+            "Survived", "Pclass", "Name", "Sex", "Age", 
+            "SibSp", "Parch", "Fare", "Cabin", "Embarked"
+        ]
+        df = df.select(selected_columns)
+        df = df.na.drop()
+        return generate_extra_cols(df)
+    except Exception as e:
+        logger.error(f"Error in data preprocessing: {str(e)}")
+        raise
 
-    print("Reading the data from random_data.csv")
-    df = spark.read.csv("random_data.csv", inferSchema=True, header=True)
-
-    # print("Reading the data from Kaggle")
-    # df = spark.read.csv("tested.xls", inferSchema=True, header=True)
-
-    print("Starting Feature Engineering")
-    rm_columns = df.select(
-        ["Survived", "Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Fare", "Cabin", "Embarked"]
-    )
-
-    # Drops the data having null values
-    result = rm_columns.na.drop()
-
-    # Generating extra columns
-    result = generate_extra_cols(result)
-
-    # Converting the Sex Column
-    sexIdx = StringIndexer(inputCol="Sex", outputCol="SexIndex")
-    sexEncode = OneHotEncoder(inputCol="SexIndex", outputCol="SexVec")
-
-    # Vectorizing the data into a new column "features"
-    # which will be our input/features class
-    assembler = VectorAssembler(
-        inputCols=["Pclass", "SexVec", "Age", "SibSp", "Parch", "Fare"],
-        outputCol="features",
-    )
-
+def create_pipeline() -> Pipeline:
+    """Create the ML pipeline."""
+    sex_indexer = StringIndexer(inputCol="Sex", outputCol="SexIndex")
+    sex_encoder = OneHotEncoder(inputCol="SexIndex", outputCol="SexVec")
+    
+    feature_cols = ["Pclass", "SexVec", "Age", "SibSp", "Parch", "Fare"]
+    assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
+    
     log_reg = LogisticRegression(featuresCol="features", labelCol="Survived")
+    
+    return Pipeline(stages=[sex_indexer, sex_encoder, assembler, log_reg])
 
-    # Creating the pipeline
-    pipeline = Pipeline(
-        stages=[sexIdx, sexEncode, assembler, log_reg]
+def evaluate_model(results: DataFrame) -> float:
+    """Evaluate the model using ROC AUC."""
+    evaluator = BinaryClassificationEvaluator(
+        rawPredictionCol="prediction",
+        labelCol="Survived"
     )
+    return evaluator.evaluate(results)
 
-    print("Splitting the data for training and testing")
-    train_data, test_data = result.randomSplit([0.7, 0.3])
+def run_experiment(spark: SparkSession) -> float:
+    """Run a single experiment and return the ROC AUC score."""
+    try:
+        df = load_and_preprocess_data(spark)
+        pipeline = create_pipeline()
+        
+        logger.info("Splitting data for training and testing")
+        train_data, test_data = df.randomSplit(TRAIN_TEST_SPLIT_RATIO)
+        
+        logger.info("Training model")
+        model = pipeline.fit(train_data)
+        
+        logger.info("Transforming test data")
+        results = model.transform(test_data)
+        
+        roc_auc = evaluate_model(results)
+        logger.info(f"ROC AUC score: {roc_auc:.4f}")
+        
+        return roc_auc
+    except Exception as e:
+        logger.error(f"Error in experiment: {str(e)}")
+        raise
 
-    print("Fit the Model (Logistic Regression)")
-    fit_model = pipeline.fit(train_data)
+def plot_results(scores: List[float], date: str) -> None:
+    """Plot and save the ROC AUC scores."""
+    try:
+        plt.figure(figsize=(8, 6))
+        plt.plot(scores, marker="o", linestyle="-", color="b")
+        plt.title("ROC AUC Scores")
+        plt.xlabel("Experiment Number")
+        plt.ylabel("AUC Score")
+        plt.grid(True)
+        plt.savefig(f"plots/roc_auc_plot_{date}.png")
+    except Exception as e:
+        logger.error(f"Error in plotting results: {str(e)}")
+        raise
 
-    print("Transform the test data")
-    results = fit_model.transform(test_data)
+if __name__ == "__main__":
+    start_time = time.time()
+    date = time.strftime("%Y-%m-%d-%H-%M-%S")
+    roc_scores = []
 
-    print("Run BinaryClassificationEvaluator on the results")
-    res = BinaryClassificationEvaluator(
-        rawPredictionCol="prediction", labelCol="Survived"
-    )
+    with create_spark_session() as spark:
+        for i in range(1, NUM_EXPERIMENTS + 1):
+            logger.info(f"Running experiment {i}")
+            score = run_experiment(spark)
+            roc_scores.append(score)
 
-    # Evaluating the AUC on results
-    roc_auc = res.evaluate(results)
+    plot_results(roc_scores, date)
 
-    print(f"The ROC_AUC score is {roc_auc}")
-
-    return roc_auc
-
-
-## STARTING OF THE MAIM PROGRAM
-
-## Running the experiment 10 times
-date = time.strftime("%Y-%m-%d-%H-%M-%S")
-roc_scores = []
-
-for i in range(1, 1000):
-    print(f"Running experiment {i}")
-    score = run_experiment(spark=spark)
-    roc_scores.append(score)
-
-plt.figure(figsize=(8, 6))
-plt.plot(roc_scores, marker="o", linestyle="-", color="b")
-plt.title("ROC AUC Scores")
-plt.xlabel("Experiment Number")
-plt.ylabel("AUC Score")
-plt.grid(True)
-plt.savefig(f"plots/roc_auc_plot_{date}.png")
-
-spark.stop()
-
-# Setting the end time
-end_time = time.time()
-
-# Calculating the total time taken
-total_time = end_time - start_time
-print(f"The total time taken is {total_time} seconds")
-
-MAX_RAM = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-
-print(f"Max RAM used: {MAX_RAM} MB")
+    end_time = time.time()
+    total_time = end_time - start_time
+    logger.info(f"The total time taken is {total_time:.2f} seconds")
